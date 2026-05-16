@@ -1,0 +1,12 @@
+const bcrypt = require("bcryptjs")
+
+const SALT_ROUNDS = 12
+
+async function hashPassword(plainPassword) {
+  if (!plainPassword || typeof plainPassword !== "string") {
+    throw new Error("Password is required")
+  }
+  return bcrypt.hash(plainPassword, SALT_ROUNDS)
+}
+
+module.exports = { hashPassword, SALT_ROUNDS }
