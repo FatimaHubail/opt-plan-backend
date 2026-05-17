@@ -14,10 +14,6 @@ const invitationSchema = new Schema(
       lowercase: true,
       trim: true,
     },
-    tokenHash: {
-      type: String,
-      required: true,
-    },
     expiresAt: {
       type: Date,
       required: true,
@@ -37,6 +33,6 @@ const invitationSchema = new Schema(
 
 // Fast lookup by email, expire old invites
 invitationSchema.index({ email: 1, consumedAt: 1 })
-invitationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }) // TTL optional
+invitationSchema.index({ userId: 1, createdAt: 1 })
 
 module.exports = mongoose.model("Invitation", invitationSchema)

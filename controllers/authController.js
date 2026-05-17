@@ -1,68 +1,145 @@
 const validator = require("validator")
 const User = require("../models/users/User")
+const Invitation = require("../models/users/Invitation")
 const bcrypt = require("bcryptjs")
 const { signAccessToken } = require("../utils/tokens")
-const { accessTokenCookieOptions } = require("../utils/cookieOptions")
-const { clearAccessTokenCookieOptions } = require("../utils/cookieOptions")
+const { accessTokenCookieOptions, clearAccessTokenCookieOptions } =
+  require("../utils/cookieOptions")
+const { expireUserIfNeeded, getLatestInvitation, isInviteExpired, isUserInviteExpired } =
+  require("../utils/inviteExpiry")
+const { validatePassword } = require("../utils/validatePassword")
+const { hashPassword } = require("../utils/hash")
 
 async function login(req, res) {
-  try {
-    const email = String(req.body.email || "").trim().toLowerCase()
-    const password = req.body.password
+  const email = String(req.body.email || "").trim().toLowerCase()
+  const password = req.body.password
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" })
-    }
-
-    if (!validator.isEmail(email)) {
-      return res.status(400).json({ message: "Invalid email address" })
-    }
-
-    const invalid = () =>
-      res.status(401).json({ message: "Invalid email or password" })
-
-    const user = await User.findOne({ email }).select("+passwordHash")
-
-    if (!user || user.status !== "active") {
-      return invalid()
-    }
-
-    const ok = await bcrypt.compare(password, user.passwordHash)
-    if (!ok) return invalid()
-
-    const token = signAccessToken(user)
-
-    res.cookie("accessToken", token, accessTokenCookieOptions())
-
-    return res.json({
-      user: {
-        id: user._id,
-        email: user.email,
-        fullName: user.fullName,
-        role: user.role,
-      },
-    })
-  } catch (err) {
-    console.error("login error:", err)
-    return res.status(500).json({ message: "Internal server error" })
+  if (!email || !password) {
+    return res.status(400).json({ message: "Email and password are required" })
   }
+
+  if (!validator.isEmail(email)) {
+    return res.status(400).json({ message: "Invalid email address" })
+  }
+
+  const invalid = () =>
+    res.status(401).json({ message: "Invalid email or password" })
+
+  const user = await User.findOne({ email }).select("+passwordHash")
+  if (!user) return invalid()
+
+  await expireUserIfNeeded(user)
+
+  if (user.status === "invite_expired") {
+    return res.status(401).json({
+      message: "Invitation expired. Contact your administrator.",
+      code: "INVITE_EXPIRED",
+    })
+  }
+
+  if (user.status === "invited") {
+    const latestInvite = await getLatestInvitation(user._id)
+    if (isInviteExpired(latestInvite) || isUserInviteExpired(user)) {
+      user.status = "invite_expired"
+      await user.save()
+      return res.status(401).json({
+        message: "Invitation expired. Contact your administrator.",
+        code: "INVITE_EXPIRED",
+      })
+    }
+  }
+
+  if (user.status === "not_invited") {
+    return res.status(401).json({
+      message:
+        "Account not activated. Contact your administrator to receive an invitation.",
+      code: "NOT_INVITED",
+    })
+  }
+
+  if (!["active", "invited"].includes(user.status)) {
+    return invalid()
+  }
+
+  const ok = await bcrypt.compare(password, user.passwordHash)
+  if (!ok) return invalid()
+
+  if (user.status === "invited") {
+    user.status = "active"
+    await user.save()
+
+    await Invitation.updateMany(
+      { userId: user._id, consumedAt: null },
+      { $set: { consumedAt: new Date() } }
+    )
+  }
+
+  const token = signAccessToken(user)
+  res.cookie("accessToken", token, accessTokenCookieOptions())
+
+  return res.json({
+    user: {
+      id: user._id,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+    },
+    requiresPasswordChange: Boolean(user.mustChangePassword),
+  })
+}
+
+async function changePassword(req, res) {
+  const currentPassword = req.body.currentPassword
+  const newPassword = req.body.newPassword
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({
+      message: "Current password and new password are required",
+    })
+  }
+
+  const check = validatePassword(newPassword)
+  if (!check.ok) {
+    return res.status(400).json({ message: check.message })
+  }
+
+  const user = await User.findById(req.user._id).select("+passwordHash")
+  if (!user) return res.status(401).json({ message: "Unauthorized" })
+
+  const ok = await bcrypt.compare(currentPassword, user.passwordHash)
+  if (!ok) {
+    return res.status(400).json({ message: "Current password is incorrect" })
+  }
+
+  const sameAsCurrent = await bcrypt.compare(newPassword, user.passwordHash)
+  if (sameAsCurrent) {
+    return res.status(400).json({
+      message: "New password must be different from current password",
+    })
+  }
+
+  user.passwordHash = await hashPassword(newPassword)
+  user.mustChangePassword = false
+  await user.save()
+
+  return res.json({ message: "Password updated" })
 }
 
 function me(req, res) {
-    return res.json({
-      user: {
-        id: req.user._id,
-        email: req.user.email,
-        fullName: req.user.fullName,
-        role: req.user.role,
-      },
-    })
-  }
+  return res.json({
+    user: {
+      id: req.user._id,
+      email: req.user.email,
+      fullName: req.user.fullName,
+      role: req.user.role,
+      mustChangePassword: req.user.mustChangePassword,
+    },
+  })
+}
 
-  function logout(req, res) {
-    res.clearCookie("accessToken", clearAccessTokenCookieOptions())
-    return res.status(204).send()
-  }
-  
+function logout(req, res) {
+  res.clearCookie("accessToken", clearAccessTokenCookieOptions())
+  return res.status(204).send()
+}
 
-module.exports = { login, me, logout }
+module.exports = { login, me, logout, changePassword }

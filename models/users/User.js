@@ -13,9 +13,14 @@ const userSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ["active", "invited", "not_invited"],
+      enum: ["active", "invited", "not_invited", "invite_expired"],
       default: "not_invited",
     },
+
+    mustChangePassword: { type: Boolean, default: false },
+
+    inviteExpiresAt: { type: Date, default: null },
+
     affiliations: [
       {
         departmentName: String,

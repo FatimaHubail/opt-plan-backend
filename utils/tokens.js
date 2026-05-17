@@ -8,3 +8,9 @@ function signAccessToken(user) {
     { expiresIn: ACCESS_TOKEN_EXPIRES_IN }
   )
 }
+
+function verifyAccessToken(token) {
+  return jwt.verify(token, process.env.JWT_ACCESS_SECRET)
+}
+
+module.exports = { signAccessToken, verifyAccessToken }
