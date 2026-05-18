@@ -9,6 +9,20 @@ const { expireUserIfNeeded, getLatestInvitation, isInviteExpired, isUserInviteEx
   require("../utils/inviteExpiry")
 const { validatePassword } = require("../utils/validatePassword")
 const { hashPassword } = require("../utils/hash")
+const { validateUobEmail } = require("../utils/uobEmail")
+const { formatDisplayName } = require("../utils/displayName")
+
+function toAuthUser(user) {
+  return {
+    id: user._id,
+    email: user.email,
+    firstName: user.firstName,
+    secondName: user.secondName || "",
+    lastName: user.lastName,
+    displayName: formatDisplayName(user),
+    role: user.role,
+  }
+}
 
 async function login(req, res) {
   const email = String(req.body.email || "").trim().toLowerCase()
@@ -20,6 +34,11 @@ async function login(req, res) {
 
   if (!validator.isEmail(email)) {
     return res.status(400).json({ message: "Invalid email address" })
+  }
+
+  const uobEmailCheck = validateUobEmail(email)
+  if (!uobEmailCheck.ok) {
+    return res.status(400).json({ message: uobEmailCheck.message })
   }
 
   const invalid = () =>
@@ -78,12 +97,7 @@ async function login(req, res) {
   res.cookie("accessToken", token, accessTokenCookieOptions())
 
   return res.json({
-    user: {
-      id: user._id,
-      email: user.email,
-      fullName: user.fullName,
-      role: user.role,
-    },
+    user: toAuthUser(user),
     requiresPasswordChange: Boolean(user.mustChangePassword),
   })
 }
@@ -128,10 +142,7 @@ async function changePassword(req, res) {
 function me(req, res) {
   return res.json({
     user: {
-      id: req.user._id,
-      email: req.user.email,
-      fullName: req.user.fullName,
-      role: req.user.role,
+      ...toAuthUser(req.user),
       mustChangePassword: req.user.mustChangePassword,
     },
   })

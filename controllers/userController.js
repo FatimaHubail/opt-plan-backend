@@ -7,17 +7,51 @@ const { hashPassword } = require("../utils/hash")
 const { buildInviteExpiry, expireUserIfNeeded } = require("../utils/inviteExpiry")
 const { sendInvitationEmail } = require("../services/mailService")
 const { isValidObjectId } = require("../utils/validateObjectId")
+const { validateUobEmail } = require("../utils/uobEmail")
+const { formatDisplayName } = require("../utils/displayName")
+const {
+  formatInviteExpiryIsoGmt3,
+  formatInviteExpiryDisplay,
+} = require("../utils/formatInviteExpiry")
 
 function toPublicUser(user) {
   return {
     id: user._id,
     email: user.email,
-    fullName: user.fullName,
+    firstName: user.firstName,
+    secondName: user.secondName || "",
+    lastName: user.lastName,
+    displayName: formatDisplayName(user),
     role: user.role,
     status: user.status,
-    inviteExpiresAt: user.inviteExpiresAt,
+    inviteExpiresAt: formatInviteExpiryIsoGmt3(user.inviteExpiresAt),
+    inviteExpiresAtDisplay: user.inviteExpiresAt
+      ? `${formatInviteExpiryDisplay(user.inviteExpiresAt)} (GMT+3)`
+      : null,
     mustChangePassword: user.mustChangePassword,
   }
+}
+
+function parseNameFields(body) {
+  return {
+    firstName: String(body.firstName || "").trim(),
+    secondName: String(body.secondName || "").trim(),
+    lastName: String(body.lastName || "").trim(),
+  }
+}
+
+function validateNameFields({ firstName, secondName, lastName }) {
+  if (!firstName || !secondName || !lastName) {
+    return { ok: false, message: "First name, second name, and last name are required" }
+  }
+  return { ok: true }
+}
+
+function validateEmailField(email) {
+  if (!validator.isEmail(email)) {
+    return { ok: false, message: "Invalid email address" }
+  }
+  return validateUobEmail(email)
 }
 
 function normalizeAffiliations(input) {
@@ -86,7 +120,7 @@ async function applyInvitationAndEmail({ user, password, createdByUserId }) {
   try {
     await sendInvitationEmail({
       to: user.email,
-      fullName: user.fullName,
+      displayName: formatDisplayName(user),
       email: user.email,
       password,
       role: user.role,
@@ -106,21 +140,27 @@ async function applyInvitationAndEmail({ user, password, createdByUserId }) {
 
 async function createUser(req, res) {
   const email = String(req.body.email || "").trim().toLowerCase()
-  const fullName = String(req.body.fullName || "").trim()
+  const names = parseNameFields(req.body)
   const password = req.body.password
   const sendInvite = req.body.sendInvite !== false
   const affiliations = normalizeAffiliations(req.body.affiliations)
 
-  if (!email || !fullName || !password) {
-    return res.status(400).json({ message: "Email, full name, and password are required" })
+  if (!email || !password) {
+    return res.status(400).json({ message: "Email and password are required" })
+  }
+
+  const nameCheck = validateNameFields(names)
+  if (!nameCheck.ok) {
+    return res.status(400).json({ message: nameCheck.message })
   }
 
   if (affiliations.length === 0) {
     return res.status(400).json({ message: "At least one department affiliation is required" })
   }
 
-  if (!validator.isEmail(email)) {
-    return res.status(400).json({ message: "Invalid email address" })
+  const emailCheck = validateEmailField(email)
+  if (!emailCheck.ok) {
+    return res.status(400).json({ message: emailCheck.message })
   }
 
   const dbRole = mapRole(req.body.role)
@@ -142,7 +182,9 @@ async function createUser(req, res) {
 
   const user = await User.create({
     email,
-    fullName,
+    firstName: names.firstName,
+    secondName: names.secondName,
+    lastName: names.lastName,
     role: dbRole,
     passwordHash,
     affiliations,
@@ -201,15 +243,48 @@ async function updateUser(req, res) {
   const user = await findUserByIdParam(req, res)
   if (!user) return
 
-  const { fullName, role, affiliations } = req.body
+  const { role, affiliations, email } = req.body
   const updates = {}
 
-  if (fullName !== undefined) {
-    const name = String(fullName).trim()
-    if (!name) {
-      return res.status(400).json({ message: "Full name cannot be empty" })
+  if (
+    req.body.firstName !== undefined ||
+    req.body.secondName !== undefined ||
+    req.body.lastName !== undefined
+  ) {
+    const names = {
+      firstName:
+        req.body.firstName !== undefined
+          ? String(req.body.firstName).trim()
+          : user.firstName,
+      secondName:
+        req.body.secondName !== undefined
+          ? String(req.body.secondName).trim()
+          : user.secondName || "",
+      lastName:
+        req.body.lastName !== undefined ? String(req.body.lastName).trim() : user.lastName,
     }
-    updates.fullName = name
+    const nameCheck = validateNameFields(names)
+    if (!nameCheck.ok) {
+      return res.status(400).json({ message: nameCheck.message })
+    }
+    updates.firstName = names.firstName
+    updates.secondName = names.secondName
+    updates.lastName = names.lastName
+  }
+
+  if (email !== undefined) {
+    const normalized = String(email).trim().toLowerCase()
+    const emailCheck = validateEmailField(normalized)
+    if (!emailCheck.ok) {
+      return res.status(400).json({ message: emailCheck.message })
+    }
+    if (normalized !== user.email) {
+      const taken = await User.findOne({ email: normalized })
+      if (taken) {
+        return res.status(409).json({ message: "Email already in use" })
+      }
+    }
+    updates.email = normalized
   }
 
   if (role !== undefined) {
