@@ -5,7 +5,6 @@ const UI_TO_DB_ROLE = {
     auditor: "auditor",
     administrator: "administrator",
     indicator_owner: "indicator_owner",
-    president: "president",
   }
   
   const VALID_DB_ROLES = [
@@ -13,7 +12,6 @@ const UI_TO_DB_ROLE = {
     "auditor",
     "contributor",
     "indicator_owner",
-    "president",
   ]
   
   function mapRole(input) {
