@@ -30,6 +30,7 @@ const ROLE_LABELS = {
     auditor: "Auditor",
     contributor: "Contributor",
     indicator_owner: "Indicator Owner",
+    president: "President",
 }
 
 function formatRoleLabel(role) {

@@ -11,7 +11,7 @@ const userSchema = new Schema(
     lastName: { type: String, required: true, trim: true },
     role: {
       type: String,
-      enum: ["administrator", "auditor", "contributor", "indicator_owner"],
+      enum: ["administrator", "auditor", "contributor", "indicator_owner", "president"],
       required: true,
     },
     status: {

@@ -24,6 +24,10 @@ function toPublicUser(user) {
     displayName: formatDisplayName(user),
     role: user.role,
     status: user.status,
+    affiliations: (user.affiliations || []).map((item) => ({
+      departmentName: item.departmentName,
+      subUnits: item.subUnits || [],
+    })),
     inviteExpiresAt: formatInviteExpiryIsoGmt3(user.inviteExpiresAt),
     inviteExpiresAtDisplay: user.inviteExpiresAt
       ? `${formatInviteExpiryDisplay(user.inviteExpiresAt)} (GMT+3)`
