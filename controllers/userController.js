@@ -1,18 +1,11 @@
 const validator = require("validator")
 const User = require("../models/users/User")
-const Invitation = require("../models/users/Invitation")
 const { mapRole } = require("../utils/mapRole")
 const { validatePassword } = require("../utils/validatePassword")
 const { hashPassword } = require("../utils/hash")
-const { buildInviteExpiry, expireUserIfNeeded } = require("../utils/inviteExpiry")
-const { sendInvitationEmail } = require("../services/mailService")
 const { isValidObjectId } = require("../utils/validateObjectId")
 const { validateUobEmail } = require("../utils/uobEmail")
 const { formatDisplayName } = require("../utils/displayName")
-const {
-  formatInviteExpiryIsoGmt3,
-  formatInviteExpiryDisplay,
-} = require("../utils/formatInviteExpiry")
 
 function toPublicUser(user) {
   return {
@@ -28,11 +21,6 @@ function toPublicUser(user) {
       departmentName: item.departmentName,
       subUnits: item.subUnits || [],
     })),
-    inviteExpiresAt: formatInviteExpiryIsoGmt3(user.inviteExpiresAt),
-    inviteExpiresAtDisplay: user.inviteExpiresAt
-      ? `${formatInviteExpiryDisplay(user.inviteExpiresAt)} (GMT+3)`
-      : null,
-    mustChangePassword: user.mustChangePassword,
   }
 }
 
@@ -92,61 +80,10 @@ async function findUserByIdParam(req, res, { withPasswordHash = false } = {}) {
   return user
 }
 
-async function applyInvitationAndEmail({ user, password, createdByUserId }) {
-  const prior = {
-    passwordHash: user.passwordHash,
-    mustChangePassword: user.mustChangePassword,
-    status: user.status,
-    inviteExpiresAt: user.inviteExpiresAt,
-  }
-
-  const expiresAt = buildInviteExpiry()
-  const passwordHash = await hashPassword(password)
-
-  user.passwordHash = passwordHash
-  user.mustChangePassword = true
-  user.status = "invited"
-  user.inviteExpiresAt = expiresAt
-  await user.save()
-
-  await Invitation.updateMany(
-    { userId: user._id, consumedAt: null },
-    { $set: { consumedAt: new Date() } }
-  )
-
-  const invitation = await Invitation.create({
-    userId: user._id,
-    email: user.email,
-    expiresAt,
-    createdByUserId,
-  })
-
-  try {
-    await sendInvitationEmail({
-      to: user.email,
-      displayName: formatDisplayName(user),
-      email: user.email,
-      password,
-      role: user.role,
-      loginUrl: `${process.env.CLIENT_ORIGIN}/login`,
-      expiresAt,
-    })
-  } catch (err) {
-    user.passwordHash = prior.passwordHash
-    user.mustChangePassword = prior.mustChangePassword
-    user.status = prior.status
-    user.inviteExpiresAt = prior.inviteExpiresAt
-    await user.save()
-    await Invitation.findByIdAndDelete(invitation._id)
-    throw err
-  }
-}
-
 async function createUser(req, res) {
   const email = String(req.body.email || "").trim().toLowerCase()
   const names = parseNameFields(req.body)
   const password = req.body.password
-  const sendInvite = req.body.sendInvite !== false
   const affiliations = normalizeAffiliations(req.body.affiliations)
 
   if (!email || !password) {
@@ -192,55 +129,22 @@ async function createUser(req, res) {
     role: dbRole,
     passwordHash,
     affiliations,
-    status: sendInvite ? "invited" : "not_invited",
-    mustChangePassword: true,
-    inviteExpiresAt: sendInvite ? buildInviteExpiry() : null,
+    status: "active",
   })
-
-  if (sendInvite) {
-    try {
-      await applyInvitationAndEmail({
-        user: await User.findById(user._id).select("+passwordHash"),
-        password,
-        createdByUserId: req.user._id,
-      })
-    } catch (err) {
-      console.error("sendInvitationEmail failed:", err)
-      await User.findByIdAndDelete(user._id)
-      await Invitation.deleteMany({ userId: user._id })
-      return res.status(503).json({ message: "Could not send invitation email" })
-    }
-
-    const refreshed = await User.findById(user._id)
-    return res.status(201).json({ user: toPublicUser(refreshed) })
-  }
 
   return res.status(201).json({ user: toPublicUser(user) })
 }
 
 async function listUsers(req, res) {
   const users = await User.find().sort({ createdAt: -1 })
-
-  for (const user of users) {
-    if (user.status === "invited") {
-      await expireUserIfNeeded(user)
-    }
-  }
-
-  const refreshed = await User.find().sort({ createdAt: -1 })
-  return res.json({ users: refreshed.map(toPublicUser) })
+  return res.json({ users: users.map(toPublicUser) })
 }
 
 async function getUser(req, res) {
   const user = await findUserByIdParam(req, res)
   if (!user) return
 
-  if (user.status === "invited") {
-    await expireUserIfNeeded(user)
-  }
-
-  const refreshed = await User.findById(user._id)
-  return res.json({ user: toPublicUser(refreshed) })
+  return res.json({ user: toPublicUser(user) })
 }
 
 async function updateUser(req, res) {
@@ -325,17 +229,16 @@ async function deleteUser(req, res) {
     return res.status(400).json({ message: "You cannot delete your own account" })
   }
 
-  await Invitation.deleteMany({ userId: user._id })
   await User.findByIdAndDelete(user._id)
 
   return res.status(204).send()
 }
 
-async function sendInvite(req, res) {
+async function resetUserPassword(req, res) {
   const password = req.body.password
 
   if (!password) {
-    return res.status(400).json({ message: "Password is required to send invitation" })
+    return res.status(400).json({ message: "Password is required" })
   }
 
   const passwordCheck = validatePassword(password)
@@ -346,61 +249,17 @@ async function sendInvite(req, res) {
   const user = await findUserByIdParam(req, res, { withPasswordHash: true })
   if (!user) return
 
-  if (user.status !== "not_invited") {
+  if (String(user._id) === String(req.user._id)) {
     return res.status(400).json({
-      message: "Send invite is only available for users who have not been invited yet",
+      message: "Use change password to update your own password",
     })
   }
 
-  try {
-    await applyInvitationAndEmail({
-      user,
-      password,
-      createdByUserId: req.user._id,
-    })
-  } catch (err) {
-    console.error("send invite email failed:", err)
-    return res.status(503).json({ message: "Could not send invitation email" })
-  }
+  user.passwordHash = await hashPassword(password)
+  user.status = "active"
+  await user.save()
 
-  const refreshed = await User.findById(user._id)
-  return res.json({ user: toPublicUser(refreshed) })
-}
-
-async function resendInvite(req, res) {
-  const password = req.body.password
-
-  if (!password) {
-    return res.status(400).json({ message: "Password is required to resend invitation" })
-  }
-
-  const passwordCheck = validatePassword(password)
-  if (!passwordCheck.ok) {
-    return res.status(400).json({ message: passwordCheck.message })
-  }
-
-  const user = await findUserByIdParam(req, res, { withPasswordHash: true })
-  if (!user) return
-
-  if (!["invited", "invite_expired"].includes(user.status)) {
-    return res.status(400).json({
-      message: "Resend invite is only available for invited or expired invitations",
-    })
-  }
-
-  try {
-    await applyInvitationAndEmail({
-      user,
-      password,
-      createdByUserId: req.user._id,
-    })
-  } catch (err) {
-    console.error("resend invite email failed:", err)
-    return res.status(503).json({ message: "Could not send invitation email" })
-  }
-
-  const refreshed = await User.findById(user._id)
-  return res.json({ user: toPublicUser(refreshed) })
+  return res.json({ user: toPublicUser(user) })
 }
 
 module.exports = {
@@ -409,6 +268,5 @@ module.exports = {
   getUser,
   updateUser,
   deleteUser,
-  sendInvite,
-  resendInvite,
+  resetUserPassword,
 }

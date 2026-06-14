@@ -22,7 +22,6 @@ async function main() {
     role: "administrator",
     passwordHash,
     status: "active",
-    mustChangePassword: false,
     affiliations: [],
   })
 

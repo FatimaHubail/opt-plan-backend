@@ -14,13 +14,6 @@ const createUserLimiter = rateLimit({
   legacyHeaders: false,
 })
 
-const resendInviteLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 20, // 20 requests per hour
-  standardHeaders: true,
-  legacyHeaders: false,
-})
-
 const changePasswordLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10, // 10 requests per 15 minutes
@@ -31,6 +24,5 @@ const changePasswordLimiter = rateLimit({
 module.exports = {
   loginLimiter,
   createUserLimiter,
-  resendInviteLimiter,
   changePasswordLimiter,
 }

@@ -9,7 +9,6 @@ const dbConnection = require("./config/dbConnection")
 const authRoutes = require("./routes/authRoutes")
 const userRoutes = require("./routes/userRoutes")
 const errorHandler = require("./middleware/errorHandler")
-const { expireInvitesJob } = require("./jobs/expireInvites")
 
 const app = express()
 
@@ -31,12 +30,6 @@ app.use("/api/auth", authRoutes)
 app.use(errorHandler)
 
 mongoose.connection.once("open", () => {
-  expireInvitesJob().catch(console.error)
-
-  setInterval(() => {
-    expireInvitesJob().catch(console.error)
-  }, 60 * 60 * 1000) // every hour
-
   app.listen(process.env.PORT || 5000, () => {
     console.log(`Server on port ${process.env.PORT || 5000}`)
   })
