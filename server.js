@@ -1,4 +1,7 @@
-require("dotenv").config()
+const result = require("dotenv").config();
+
+console.log("DOTENV RESULT:", result);
+console.log("DATABASE_URI:", process.env.DATABASE_URI);
 
 const express = require("express")
 const helmet = require("helmet")
