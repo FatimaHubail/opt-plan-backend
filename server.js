@@ -33,7 +33,7 @@ app.use("/api/auth", authRoutes)
 app.use(errorHandler)
 
 mongoose.connection.once("open", () => {
-  app.listen(process.env.PORT || 5000, () => {
-    console.log(`Server on port ${process.env.PORT || 5000}`)
+  app.listen(process.env.PORT || 5050, () => {
+    console.log(`Server on port ${process.env.PORT || 5050}`)
   })
 })
